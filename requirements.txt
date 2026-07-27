@@ -4,13 +4,13 @@
 #
 #    pip-compile requirements.in
 #
-certifi==2024.2.2
+certifi==2024.7.4
     # via requests
-charset-normalizer==3.3.2
+chardet==3.0.4
     # via requests
 depbot-test-pkg==1.0.0
     # via -r requirements.in
-idna==3.7
+idna==2.10
     # via requests
 requests==2.25.0
     # via -r requirements.in
