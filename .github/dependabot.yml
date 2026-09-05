@@ -4,3 +4,8 @@ updates:
     directory: /
     schedule:
       interval: daily
+    groups:
+      "test <x-test>test 110</x-test> test":
+        applies-to: security-updates
+        patterns:
+          - certifi
